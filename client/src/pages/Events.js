@@ -42,6 +42,7 @@ const Events = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
     const [events, setEvents] = useState([]);
+    const [registeredEvents, setRegisteredEvents] = useState([]);
     const [clubs, setClubs] = useState([]);
     const [universities, setUniversities] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -82,8 +83,21 @@ const Events = () => {
         fetchEvents();
         fetchClubs();
         fetchUniversities();
+        fetchRegisteredEvents();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [page, search, type, clubFilter, universityFilter, upcomingOnly]);
+    }, [page, search, type, clubFilter, universityFilter, upcomingOnly, user]);
+    const fetchRegisteredEvents = async () => {
+        if (!user) return;
+        try {
+            const res = await axios.get('/api/event-registrations');
+            // Filter for current user
+            const userEvents = res.data.registrations.filter(r => r.user === user._id);
+            setRegisteredEvents(userEvents.map(r => r.event));
+        } catch (error) {
+            console.error('Error fetching registered events:', error);
+            setRegisteredEvents([]);
+        }
+    };
 
     const fetchEvents = async () => {
         try {
@@ -135,23 +149,42 @@ const Events = () => {
 
     const handleRegisterEvent = async (eventId) => {
         try {
-            await axios.post(`/api/events/${eventId}/register`);
-            fetchEvents(); // Refresh data
+            const response = await axios.post(`/api/events/${eventId}/register`);
+            alert(response.data?.message || 'Registered successfully');
+            await fetchRegisteredEvents(); // Sync registered events count
+            setRegisteredEvents((prev) => [...prev, eventId]); // Update button state immediately
+            fetchEvents(); // Refresh events list
         } catch (error) {
             console.error('Error registering for event:', error);
-            alert(error.response?.data?.message || 'Failed to register for event');
+            // Show backend error message if available, else fallback
+            alert(error.response?.data?.message || 'Registration failed. Please try again.');
         }
     };
 
     const handleCreateEvent = async () => {
+        console.log('Submitting event...', newEvent);
         try {
+            // Map frontend fields to backend expectations
             const eventData = {
-                ...newEvent,
-                startDate: newEvent.startDate.toISOString(),
-                endDate: newEvent.endDate.toISOString(),
-                registrationDeadline: newEvent.registrationDeadline.toISOString(),
-                capacity: newEvent.capacity ? parseInt(newEvent.capacity) : undefined
+                title: newEvent.title,
+                description: newEvent.description,
+                type: newEvent.type || 'Meeting',
+                organizer: newEvent.organizer,
+                startDate: newEvent.startDate?.toISOString?.() || newEvent.startDate,
+                endDate: newEvent.endDate?.toISOString?.() || newEvent.endDate,
+                startTime: newEvent.startTime || '09:00',
+                endTime: newEvent.endTime || '17:00',
+                venue: newEvent.venue?.name || 'TBD',
+                capacity: parseInt(newEvent.capacity) || 60,
+                registrationRequired: !!newEvent.registrationRequired,
+                registrationDeadline: newEvent.registrationDeadline?.toISOString?.() || newEvent.registrationDeadline,
+                entryFee: parseFloat(newEvent.entryFee) || 0,
+                requirements: newEvent.requirements || '',
+                contactInfo: newEvent.contactInfo || '',
+                tags: newEvent.tags || [],
+                isPublic: !!newEvent.isPublic
             };
+            console.log('Event data being sent:', eventData);
 
             await axios.post('/api/events', eventData);
             setCreateDialogOpen(false);
@@ -159,7 +192,16 @@ const Events = () => {
             fetchEvents(); // Refresh data
         } catch (error) {
             console.error('Error creating event:', error);
-            alert(error.response?.data?.message || 'Failed to create event');
+            if (error.response) {
+                console.error('Backend response:', error.response);
+                alert(`Backend error: ${JSON.stringify(error.response.data)}`);
+            } else if (error.request) {
+                console.error('No response received:', error.request);
+                alert('No response received from backend. Check server connection.');
+            } else {
+                console.error('Error setting up request:', error.message);
+                alert(`Error setting up request: ${error.message}`);
+            }
         }
     };
 
@@ -197,7 +239,7 @@ const Events = () => {
     };
 
     const isUserRegistered = (event) => {
-        return event.attendees?.some(attendee => attendee._id === user?._id);
+        return registeredEvents.includes(event._id);
     };
 
     const handleEventClick = (eventId) => {
@@ -458,7 +500,7 @@ const Events = () => {
                                             </CardContent>
 
                                             <CardActions sx={{ p: 3, pt: 0 }}>
-                                                {event.isRegistrationRequired ? (
+                                                {event.registrationRequired ? (
                                                     !isUserRegistered(event) ? (
                                                         <Button
                                                             className="event-register-btn"

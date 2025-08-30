@@ -76,13 +76,20 @@ router.get('/', optionalAuth, async (req, res) => {
             query.startDate = { $gte: new Date() };
         }
 
-        const events = await Event.find(query)
+        const eventsRaw = await Event.find(query)
             .populate('club', 'name category university')
             .populate('university', 'name code location')
             .populate('attendees.user', 'name email')
             .limit(limit * 1)
             .skip((page - 1) * limit)
             .sort({ startDate: 1 });
+
+        // Map isRegistrationRequired to registrationRequired for frontend compatibility
+        const events = eventsRaw.map(event => {
+            const obj = event.toObject();
+            obj.registrationRequired = obj.isRegistrationRequired;
+            return obj;
+        });
 
         const total = await Event.countDocuments(query);
 
@@ -148,6 +155,7 @@ router.get('/:id', async (req, res) => {
 // @access  Private (Club members only)
 router.post('/', verifyToken, async (req, res) => {
     try {
+        console.log('Incoming event creation request:', req.body);
         const {
             title,
             description,
@@ -168,15 +176,32 @@ router.post('/', verifyToken, async (req, res) => {
             isPublic = true
         } = req.body;
 
+        // Robustly map contactInfo to contactPerson
+        let contactPerson = {};
+        if (typeof contactInfo === 'string') {
+            // If contactInfo is a string, use as name only
+            contactPerson = { name: contactInfo };
+        } else if (contactInfo && typeof contactInfo === 'object') {
+            contactPerson = {
+                name: contactInfo.name || '',
+                email: contactInfo.email || '',
+                phone: contactInfo.phone || ''
+            };
+        }
+
         // Check if user is authorized to create events for this club
         const club = await Club.findById(organizer).populate('university');
+        console.log('Club found for organizer:', club);
         if (!club) {
+            console.log('Club not found for organizer:', organizer);
             return res.status(404).json({ message: 'Club not found' });
         }
 
         // Verify club belongs to user's university
         const userUniversityId = req.user.university?._id || req.user.university;
+        console.log('User university:', userUniversityId, 'Club university:', club.university._id);
         if (club.university._id.toString() !== userUniversityId.toString()) {
+            console.log('Club university mismatch. User:', userUniversityId, 'Club:', club.university._id);
             return res.status(403).json({ message: 'You can only create events for clubs at your university' });
         }
 
@@ -184,28 +209,48 @@ router.post('/', verifyToken, async (req, res) => {
         let authorized = false;
 
         if (req.user.role === 'Administrator') {
-            // Administrators can create events for any club
             authorized = true;
         } else if (req.user.role === 'Club Admin') {
-            // Club admins can only create events for clubs where they are president
             if (club.president && club.president.toString() === req.user._id.toString()) {
                 authorized = true;
             }
         } else {
-            // Regular students must be members of the club
             const isMember = club.members.some(
                 member => member.user.toString() === req.user._id.toString()
             );
             authorized = isMember;
         }
 
+        console.log('Authorization result:', authorized, 'User role:', req.user.role);
         if (!authorized) {
             const roleMessage = req.user.role === 'Club Admin'
                 ? 'You can only create events for clubs where you are the president'
                 : 'You must be a member of the club to create events';
+            console.log('Authorization failed:', roleMessage);
             return res.status(403).json({ message: roleMessage });
         }
 
+        console.log('Creating event with data:', {
+            title,
+            description,
+            eventType: type,
+            club: organizer,
+            university: club.university._id,
+            startDate,
+            endDate,
+            startTime: startTime || '09:00',
+            endTime: endTime || '17:00',
+            venue: venue || 'TBD',
+            maxAttendees: capacity,
+            isRegistrationRequired: registrationRequired,
+            registrationDeadline,
+            registrationFee: entryFee || 0,
+            requirements,
+            contactPerson,
+            tags,
+            isPublic: isPublic,
+            status: 'Published'
+        });
         const event = new Event({
             title,
             description,
@@ -222,12 +267,19 @@ router.post('/', verifyToken, async (req, res) => {
             registrationDeadline,
             registrationFee: entryFee || 0,
             requirements,
-            contactInfo,
+            contactPerson,
             tags,
-            isPublic: isPublic
+            isPublic: isPublic,
+            status: 'Published' // Default to Published, not upcoming
         });
 
-        await event.save();
+        try {
+            await event.save();
+            console.log('Event created and stored:', event);
+        } catch (saveError) {
+            console.error('Error saving event to DB:', saveError);
+            return res.status(500).json({ message: 'Error saving event', error: saveError });
+        }
 
         const populatedEvent = await Event.findById(event._id)
             .populate('club', 'name category')
@@ -256,20 +308,10 @@ router.post('/:id/register', verifyToken, async (req, res) => {
             return res.status(404).json({ message: 'Event not found' });
         }
 
-        // Check if user can access this event (public/private logic)
-        const userUniversityId = req.user.university?._id || req.user.university;
-
-        if (!event.isPublic) {
-            // For private events, user must be from the same university
-            if (!userUniversityId || event.university._id.toString() !== userUniversityId.toString()) {
-                return res.status(403).json({
-                    message: 'This is a private event. Only students from ' + event.university.name + ' can register.'
-                });
-            }
-        }
+    // University restriction removed: allow any user to register for any event
 
         // Check if registration is required
-        if (!event.registrationRequired) {
+        if (!event.isRegistrationRequired) {
             return res.status(400).json({ message: 'Registration is not required for this event' });
         }
 
@@ -285,7 +327,7 @@ router.post('/:id/register', verifyToken, async (req, res) => {
 
         // Check if user is already registered
         const isRegistered = event.attendees.some(
-            attendee => attendee.toString() === req.user._id.toString()
+            attendee => attendee.user && attendee.user.toString() === req.user._id.toString()
         );
 
         if (isRegistered) {
@@ -293,7 +335,7 @@ router.post('/:id/register', verifyToken, async (req, res) => {
         }
 
         // Add user to event attendees
-        event.attendees.push(req.user._id);
+        event.attendees.push({ user: req.user._id });
         await event.save();
 
         // Add event to user's attended events
@@ -306,10 +348,44 @@ router.post('/:id/register', verifyToken, async (req, res) => {
             }
         });
 
-        res.json({ message: 'Successfully registered for the event' });
+        // Store registration in eventregistrations table with all required fields
+        const EventRegistration = require('../models/EventRegistration');
+        const user = await User.findById(req.user._id).populate('university', 'name');
+        const eventTitle = event.title || 'Unknown Event';
+        let universityName = (event.university && event.university.name) || (user.university && user.university.name);
+        if (!universityName) {
+            const University = require('../models/University');
+            const uniDoc = await University.findById(event.university._id || event.university);
+            universityName = uniDoc ? uniDoc.name : 'Unknown University';
+        }
+        // Check for duplicate registration in eventregistrations table
+        const existingRegistration = await EventRegistration.findOne({ event: event._id, user: req.user._id });
+        if (existingRegistration) {
+            return res.status(400).json({ message: 'You are already registered for this event (eventregistrations).' });
+        }
+        try {
+            const registration = new EventRegistration({
+                event: event._id,
+                eventTitle,
+                user: req.user._id,
+                studentName: user.name,
+                university: user.university._id,
+                universityName,
+                registeredAt: new Date()
+            });
+            await registration.save();
+        } catch (err) {
+            console.error('Error saving to eventregistrations:', err);
+            return res.status(500).json({ message: 'Failed to save registration.' });
+        }
+
+        return res.status(201).json({ message: 'Registered successfully', registration });
     } catch (error) {
         console.error('Register event error:', error);
-        res.status(500).json({ message: 'Server error' });
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({ message: 'Invalid registration data.' });
+        }
+        return res.status(500).json({ message: 'Registration failed. Please try again.' });
     }
 });
 
@@ -567,79 +643,65 @@ router.delete('/:id', verifyToken, async (req, res) => {
 });
 // =================
 // REGISTER FOR EVENT
-// =================
 router.post('/:id/register', verifyToken, async (req, res) => {
-  try {
-    const event = await Event.findById(req.params.id).populate('university', 'name code');
+    try {
+        const event = await Event.findById(req.params.id).populate('university', 'name code');
+        if (!event) return res.status(404).json({ message: 'Event not found' });
 
-    if (!event) return res.status(404).json({ message: 'Event not found' });
-
-    const userUniversityId = req.user.university?._id || req.user.university;
-
-    // Private event access check
-    if (!event.isPublic) {
-      if (!userUniversityId || event.university._id.toString() !== userUniversityId.toString()) {
-        return res.status(403).json({
-          message: `This is a private event. Only students from ${event.university.name} can register.`
+        // Registration required check
+        if (!event.isRegistrationRequired) {
+            return res.status(400).json({ message: 'Registration is not required for this event' });
+        }
+        // Deadline check
+        if (event.registrationDeadline && new Date() > event.registrationDeadline) {
+            return res.status(400).json({ message: 'Registration deadline has passed' });
+        }
+        // Capacity check
+        const capacity = event.maxAttendees || event.capacity;
+        if (capacity && event.attendees.length >= capacity) {
+            return res.status(400).json({ message: 'Event is at full capacity' });
+        }
+        // Check for duplicate in event attendees
+        const alreadyAttending = event.attendees.some(a => a.user.toString() === req.user._id.toString());
+        if (alreadyAttending) {
+            return res.status(409).json({ message: 'You have already registered for this event.' });
+        }
+        // Check for duplicate in eventregistrations
+        const EventRegistration = require('../models/EventRegistration');
+        const existingRegistration = await EventRegistration.findOne({ event: event._id, user: req.user._id });
+        if (existingRegistration) {
+            return res.status(409).json({ message: 'You have already registered for this event.' });
+        }
+        // Add user to event attendees
+        event.attendees.push({ user: req.user._id });
+        await event.save();
+        // Store registration in eventregistrations
+        const user = await User.findById(req.user._id).populate('university', 'name');
+        const eventTitle = event.title || 'Unknown Event';
+        let universityName = (event.university && event.university.name) || (user.university && user.university.name);
+        if (!universityName) {
+            const University = require('../models/University');
+            const uniDoc = await University.findById(event.university._id || event.university);
+            universityName = uniDoc ? uniDoc.name : 'Unknown University';
+        }
+        const registration = new EventRegistration({
+            event: event._id,
+            eventTitle,
+            user: req.user._id,
+            studentName: user.name,
+            university: user.university._id,
+            universityName,
+            registeredAt: new Date()
         });
-      }
+        await registration.save();
+        return res.status(201).json({ message: 'Registered successfully', registration });
+    } catch (error) {
+        console.error('Register event error:', error);
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({ message: 'Invalid registration data.' });
+        }
+        return res.status(500).json({ message: 'Registration failed. Please try again.' });
     }
-
-    // Check if registration is required
-    if (!event.isRegistrationRequired) {
-      return res.status(400).json({ message: 'Registration is not required for this event' });
-    }
-
-    // Deadline check
-    if (event.registrationDeadline && new Date() > event.registrationDeadline) {
-      return res.status(400).json({ message: 'Registration deadline has passed' });
-    }
-
-    // Capacity check
-    if (event.maxAttendees && event.attendees.length >= event.maxAttendees) {
-      return res.status(400).json({ message: 'Event is at full capacity' });
-    }
-
-    // Check if already registered
-    const isRegistered = event.attendees.some(a => a.user.toString() === req.user._id.toString());
-    if (isRegistered) {
-      return res.status(400).json({ message: 'You are already registered for this event' });
-    }
-
-    // Push attendee object
-    event.attendees.push({ user: req.user._id });
-    await event.save();
-
-    res.json({ message: 'Successfully registered for the event', event });
-  } catch (error) {
-    console.error('Register event error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// ==================
-// UNREGISTER FROM EVENT
-// ==================
-router.post('/:id/unregister', verifyToken, async (req, res) => {
-  try {
-    const event = await Event.findById(req.params.id);
-
-    if (!event) return res.status(404).json({ message: 'Event not found' });
-
-    // Prevent unregister after start
-    if (new Date() >= event.startDate) {
-      return res.status(400).json({ message: 'Cannot unregister from an event that has already started' });
-    }
-
-    // Remove attendee
-    event.attendees = event.attendees.filter(a => a.user.toString() !== req.user._id.toString());
-    await event.save();
-
-    res.json({ message: 'Successfully unregistered from the event', event });
-  } catch (error) {
-    console.error('Unregister event error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
 });
 
 // ==================

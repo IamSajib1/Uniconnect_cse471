@@ -81,6 +81,10 @@ const userSchema = new mongoose.Schema({
       default: Date.now
     }
   }],
+  registeredEvents: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Event'
+  }],
   phone: {
     type: String,
     trim: true

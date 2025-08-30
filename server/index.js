@@ -13,6 +13,7 @@ const clubRequestRoutes = require('./routes/clubRequests');
 const teamRecruitmentRoutes = require('./routes/teamRecruitment');
 const announcementRoutes = require('./routes/announcements');
 const debugRoutes = require('./routes/debug');
+const eventRegistrationsRoute = require('./routes/eventRegistrations');
 
 // Load environment variables
 dotenv.config();
@@ -35,7 +36,7 @@ app.use('/api/club-requests', clubRequestRoutes);
 app.use('/api/team-recruitment', teamRecruitmentRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/debug', debugRoutes);
-
+app.use('/api/event-registrations', eventRegistrationsRoute);
 // Root route
 app.get('/', (req, res) => {
   res.json({ message: 'Welcome to Uniconnect API' });

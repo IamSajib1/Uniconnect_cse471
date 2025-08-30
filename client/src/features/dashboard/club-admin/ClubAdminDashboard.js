@@ -213,13 +213,36 @@ const ClubAdminDashboard = () => {
         try {
             formStates.setSubmitLoading(true);
 
+            // Map frontend fields to backend expectations
+            const clubId = formStates.eventFormData.club || (dashboardData.myClubs[0]?._id) || '';
+            const eventData = {
+                title: formStates.eventFormData.title,
+                description: formStates.eventFormData.description,
+                type: formStates.eventFormData.category === 'Sports' ? 'Sports Event' : (formStates.eventFormData.category || 'Meeting'),
+                organizer: clubId,
+                startDate: formStates.eventFormData.date,
+                endDate: formStates.eventFormData.endDate && formStates.eventFormData.endDate !== ''
+                    ? formStates.eventFormData.endDate
+                    : formStates.eventFormData.date || new Date().toISOString(),
+                startTime: formStates.eventFormData.time,
+                endTime: formStates.eventFormData.endTime,
+                venue: formStates.eventFormData.location,
+                capacity: parseInt(formStates.eventFormData.maxAttendees) || 60,
+                entryFee: parseFloat(formStates.eventFormData.price) || 0,
+                requirements: formStates.eventFormData.requirements || '',
+                tags: formStates.eventFormData.tags || [],
+                isPublic: !formStates.eventFormData.isPrivate,
+                registrationDeadline: formStates.eventFormData.registrationDeadline,
+                isRegistrationRequired: true // or set based on your logic
+            };
+
             if (dialogStates.editMode) {
-                const updatedEvent = await eventAPI.updateEvent(dialogStates.selectedEvent._id, formStates.eventFormData);
+                const updatedEvent = await eventAPI.updateEvent(dialogStates.selectedEvent._id, eventData);
                 dashboardData.setMyEvents(prev =>
                     prev.map(event => event._id === dialogStates.selectedEvent._id ? updatedEvent.event : event)
                 );
             } else {
-                const newEvent = await eventAPI.createEvent(formStates.eventFormData);
+                const newEvent = await eventAPI.createEvent(eventData);
                 dashboardData.setMyEvents(prev => [...prev, newEvent.event]);
             }
 

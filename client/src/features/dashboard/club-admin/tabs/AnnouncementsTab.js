@@ -66,29 +66,34 @@ const AnnouncementsTab = ({ clubs, refreshData }) => {
     const announcementTypes = ['General', 'Event', 'Important', 'Urgent', 'Achievement'];
     const priorities = ['Low', 'Normal', 'High', 'Urgent'];
 
-    // Fetch announcements for selected club
-    const fetchAnnouncements = useCallback(async (clubId) => {
-        if (!clubId || !token) return;
-
+    // Fetch announcements for all clubs
+    const fetchAllAnnouncements = useCallback(async () => {
+        if (!clubs || clubs.length === 0 || !token) return;
+        setLoading(true);
         try {
-            setLoading(true);
-            const response = await axios.get(`/api/announcements/club/${clubId}?page=1&limit=20`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            setAnnouncements(response.data.announcements || []);
+            let allAnnouncements = [];
+            for (const club of clubs) {
+                const response = await axios.get(`/api/announcements/club/${club._id}?page=1&limit=20`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                if (response.data.announcements) {
+                    allAnnouncements = allAnnouncements.concat(response.data.announcements);
+                }
+            }
+            // Optionally sort by createdAt descending
+            allAnnouncements.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            setAnnouncements(allAnnouncements);
         } catch (error) {
             console.error('Error fetching announcements:', error);
             setAnnouncements([]);
         } finally {
             setLoading(false);
         }
-    }, [token]);
+    }, [clubs, token]);
 
     useEffect(() => {
-        if (selectedClub) {
-            fetchAnnouncements(selectedClub);
-        }
-    }, [selectedClub, fetchAnnouncements]);
+        fetchAllAnnouncements();
+    }, [clubs, fetchAllAnnouncements]);
 
     // Handle form submission
     const handleSubmit = async () => {
@@ -104,7 +109,7 @@ const AnnouncementsTab = ({ clubs, refreshData }) => {
                     headers: { Authorization: `Bearer ${token}` }
                 });
             } else {
-                await axios.post('/api/announcements', payload, {
+                await axios.post(`/api/announcements/club/${payload.club}`, payload, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
             }
@@ -112,7 +117,7 @@ const AnnouncementsTab = ({ clubs, refreshData }) => {
             resetForm();
             setCreateDialog(false);
             setEditDialog({ open: false, announcement: null });
-            fetchAnnouncements(selectedClub);
+            fetchAllAnnouncements();
             if (refreshData) refreshData();
         } catch (error) {
             console.error('Error saving announcement:', error);
@@ -128,7 +133,7 @@ const AnnouncementsTab = ({ clubs, refreshData }) => {
             await axios.delete(`/api/announcements/${announcementId}`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            fetchAnnouncements(selectedClub);
+            fetchAllAnnouncements();
             if (refreshData) refreshData();
         } catch (error) {
             console.error('Error deleting announcement:', error);
@@ -143,7 +148,7 @@ const AnnouncementsTab = ({ clubs, refreshData }) => {
                 { isPinned: !announcement.isPinned },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
-            fetchAnnouncements(selectedClub);
+            fetchAllAnnouncements();
         } catch (error) {
             console.error('Error toggling pin:', error);
         }

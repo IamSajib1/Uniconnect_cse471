@@ -21,10 +21,18 @@ router.get('/club/:clubId', async (req, res) => {
             sortOrder = 'desc'
         } = req.query;
 
-        // Verify club exists
-        const club = await Club.findById(clubId);
+        // Verify club exists and populate members
+        const club = await Club.findById(clubId).populate('members.user', '_id role');
         if (!club) {
             return res.status(404).json({ message: 'Club not found' });
+        }
+
+        // If user is authenticated, check membership and role
+        if (req.user) {
+            const member = club.members.find(m => m.user._id.toString() === req.user._id.toString());
+            if (!member || req.user.role !== 'Student') {
+                return res.status(403).json({ message: 'Only club members who are students can view announcements.' });
+            }
         }
 
         const announcements = await Announcement.getActiveAnnouncements(clubId, {

@@ -24,14 +24,19 @@ import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import LocationOnIcon from '@mui/icons-material/LocationOn';
 import TeamRecruitmentHub from '../shared/TeamRecruitmentHub';
 import EnhancedProfile from '../shared/EnhancedProfile';
+import { useNavigate } from 'react-router-dom';
 
 // Student Dashboard Component for Regular Students
 const StudentDashboard = () => {
     const { user, refreshUser, token } = useAuth();
     const [clubs, setClubs] = useState([]);
     const [events, setEvents] = useState([]);
+    const [registeredEvents, setRegisteredEvents] = useState([]);
     const [loading, setLoading] = useState(true);
     const [tabValue, setTabValue] = useState(0);
+    // ...existing code...
+
+    const navigate = useNavigate();
 
     const fetchClubsAndEvents = useCallback(async () => {
         try {
@@ -40,7 +45,7 @@ const StudentDashboard = () => {
 
             const [clubsRes, eventsRes] = await Promise.all([
                 axios.get(`/api/clubs${universityId ? `?university=${universityId}` : ''}`, { headers }),
-                axios.get(`/api/events${universityId ? `?university=${universityId}` : ''}`, { headers })
+                axios.get(`/api/events`, { headers })
             ]);
 
             setClubs(clubsRes.data.clubs || []);
@@ -57,10 +62,23 @@ const StudentDashboard = () => {
     useEffect(() => {
         if (user && user.clubMemberships !== undefined && user.eventsAttended !== undefined) {
             fetchClubsAndEvents();
+            // Fetch registered events from eventregistrations table
+            const fetchRegisteredEvents = async () => {
+                try {
+                    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+                    const res = await axios.get('/api/event-registrations', { headers });
+                    // Filter for current user
+                    const userEvents = res.data.registrations.filter(r => r.studentName === user.name && r.university === user.university?.name);
+                    setRegisteredEvents(userEvents.map(r => r.event));
+                } catch (error) {
+                    console.error('Error fetching registered events:', error);
+                    setRegisteredEvents([]);
+                }
+            };
+            fetchRegisteredEvents();
         }
-    }, [fetchClubsAndEvents, user]);
+    }, [fetchClubsAndEvents, user, token]);
 
-    // Debug user data - remove in production
     useEffect(() => {
         if (user) {
             console.log('Current user data:', user);
@@ -78,8 +96,8 @@ const StudentDashboard = () => {
 
             if (response.data.message) {
                 alert(response.data.message);
-                await refreshUser(); // Refresh user data first
-                await fetchClubsAndEvents(); // Then refresh clubs and events
+                await refreshUser();
+                await fetchClubsAndEvents();
             }
         } catch (error) {
             console.error('Error joining club:', error);
@@ -95,13 +113,26 @@ const StudentDashboard = () => {
 
             if (response.data.message) {
                 alert(response.data.message);
-                await refreshUser(); // Refresh user data first
-                await fetchClubsAndEvents(); // Then refresh clubs and events
+                await refreshUser();
+                await fetchClubsAndEvents();
+                // Immediately update registeredEvents state
+                const headers = token ? { Authorization: `Bearer ${token}` } : {};
+                const res = await axios.get('/api/event-registrations', { headers });
+                const userEvents = res.data.registrations.filter(r => r.studentName === user.name && r.university === user.university?.name);
+                setRegisteredEvents(userEvents.map(r => r.event));
             }
         } catch (error) {
             console.error('Error registering for event:', error);
-            alert(error.response?.data?.message || 'Failed to register for event');
+            if (error.response?.status === 400 && error.response?.data?.message) {
+                alert(error.response.data.message);
+            } else {
+                alert('Server error. Please try again later.');
+            }
         }
+    };
+
+    const handleOpenEvent = (eventId) => {
+        navigate(`/events/${eventId}`);
     };
 
     const handleForceRefresh = async () => {
@@ -110,7 +141,6 @@ const StudentDashboard = () => {
             await refreshUser();
             await fetchClubsAndEvents();
 
-            // Also test our debug endpoint
             const debugResponse = await axios.get('/api/debug/user', {
                 headers: { Authorization: `Bearer ${token}` }
             });
@@ -134,7 +164,6 @@ const StudentDashboard = () => {
         });
     };
 
-    // Get user's joined clubs - SIMPLIFIED FOR DEBUGGING
     const userClubs = useMemo(() => {
         if (!user?.clubMemberships || !clubs.length) {
             console.log('No user memberships or clubs available');
@@ -163,34 +192,7 @@ const StudentDashboard = () => {
         return result;
     }, [user?.clubMemberships, clubs]);
 
-    // Get user's registered events - SIMPLIFIED FOR DEBUGGING
-    const userEvents = useMemo(() => {
-        if (!user?.eventsAttended || !events.length) {
-            console.log('No user event attendance or events available');
-            return [];
-        }
-
-        const result = [];
-        console.log('=== EVENT REGISTRATION DEBUG ===');
-        console.log('User events attended:', user.eventsAttended);
-        console.log('Available events:', events.map(e => ({ id: e._id, title: e.title })));
-
-        user.eventsAttended.forEach(attendance => {
-            const attendanceEventId = attendance.event?._id || attendance.event;
-            console.log('Looking for event with ID:', attendanceEventId);
-
-            const foundEvent = events.find(event => event._id === attendanceEventId);
-            if (foundEvent) {
-                console.log('Found matching event:', foundEvent.title);
-                result.push(foundEvent);
-            } else {
-                console.log('No matching event found for ID:', attendanceEventId);
-            }
-        });
-
-        console.log('Final userEvents result:', result.map(e => e.title));
-        return result;
-    }, [user?.eventsAttended, events]);
+    // ...existing code...
 
     const renderClubs = (clubList) => (
         <Grid container spacing={3}>
@@ -286,7 +288,7 @@ const StudentDashboard = () => {
                     </Box>
                 </Grid>
             ) : (
-                eventList.map((event) => (
+            eventList.map((event) => (
                     <Grid item xs={12} sm={6} md={4} key={event._id}>
                         <Card
                             sx={{
@@ -351,7 +353,7 @@ const StudentDashboard = () => {
                                 </Typography>
                             </CardContent>
                             <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2 }}>
-                                {event.registrationRequired && !userEvents.find(ue => ue._id === event._id) ? (
+                                {event.isRegistrationRequired && !registeredEvents.includes(event.event || event.title) ? (
                                     <Button
                                         size="small"
                                         variant="contained"
@@ -361,10 +363,18 @@ const StudentDashboard = () => {
                                     >
                                         Register
                                     </Button>
-                                ) : userEvents.find(ue => ue._id === event._id) ? (
+                                ) : registeredEvents.includes(event.event || event.title) ? (
                                     <Chip label="Registered" color="success" size="small" />
                                 ) : (
-                                    <Chip label="Open Event" color="info" size="small" />
+                                    <Button
+                                        size="small"
+                                        variant="outlined"
+                                        color="info"
+                                        onClick={() => handleOpenEvent(event._id)}
+                                        fullWidth
+                                    >
+                                        Open Event
+                                    </Button>
                                 )}
                             </CardActions>
                         </Card>
@@ -387,7 +397,6 @@ const StudentDashboard = () => {
 
     return (
         <Container maxWidth="lg" sx={{ py: 4 }}>
-            {/* Welcome Header */}
             <Paper sx={{ p: 4, mb: 4, background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white' }}>
                 <Box display="flex" justifyContent="space-between" alignItems="center">
                     <Box>
@@ -413,7 +422,6 @@ const StudentDashboard = () => {
                 </Box>
             </Paper>
 
-            {/* Quick Stats */}
             <Grid container spacing={3} sx={{ mb: 4 }}>
                 <Grid item xs={12} sm={6} md={3}>
                     <Card>
@@ -437,7 +445,7 @@ const StudentDashboard = () => {
                                 <EventIcon />
                             </Avatar>
                             <Typography variant="h4" color="secondary" fontWeight="bold">
-                                {userEvents.length}
+                                {registeredEvents.length}
                             </Typography>
                             <Typography color="text.secondary">
                                 Registered Events
@@ -477,7 +485,6 @@ const StudentDashboard = () => {
                 </Grid>
             </Grid>
 
-            {/* Navigation Tabs */}
             <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
                 <Tabs value={tabValue} onChange={(e, newValue) => setTabValue(newValue)}>
                     <Tab icon={<GroupsIcon />} label="My Clubs" />
@@ -488,7 +495,6 @@ const StudentDashboard = () => {
                 </Tabs>
             </Box>
 
-            {/* My Clubs Tab */}
             {tabValue === 0 && (
                 <Box>
                     <Typography variant="h5" gutterBottom>
@@ -498,7 +504,6 @@ const StudentDashboard = () => {
                 </Box>
             )}
 
-            {/* All Clubs Tab */}
             {tabValue === 1 && (
                 <Box>
                     <Typography variant="h5" gutterBottom>
@@ -508,9 +513,8 @@ const StudentDashboard = () => {
                 </Box>
             )}
 
-            {/* All Events Tab */}
             {tabValue === 2 && (
-                <Box>
+                <Box sx={{ mt: 4 }}>
                     <Typography variant="h5" gutterBottom>
                         All Events ({events.length})
                     </Typography>
@@ -518,12 +522,10 @@ const StudentDashboard = () => {
                 </Box>
             )}
 
-            {/* Team Recruitment Hub Tab */}
             {tabValue === 3 && (
                 <TeamRecruitmentHub />
             )}
 
-            {/* My Profile Tab */}
             {tabValue === 4 && (
                 <EnhancedProfile />
             )}
